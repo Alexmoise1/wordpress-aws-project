@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project deploys and monitors two WordPress environments on AWS using CloudFormation and Docker:
+This project deploys and monitors two WordPress environments on AWS using CloudFormation:
 
 - **Live Environment** — Always running, used for publishing blogs to the public
 - **Dev Environment** — Runs only during business hours (9 AM – 6 PM CST), used for development and testing
@@ -20,10 +20,6 @@ This project deploys and monitors two WordPress environments on AWS using CloudF
               |                         |
          EC2 Instance              EC2 Instance
          (Always ON)               (9AM-6PM only)
-              |                         |
-           Docker                    Docker
-         WordPress                 WordPress
-           + MySQL                  + MySQL
               |                         |
         Elastic IP                Elastic IP
               |                         |
@@ -47,7 +43,6 @@ This project deploys and monitors two WordPress environments on AWS using CloudF
 |---|---|
 | **CloudFormation** | Infrastructure as Code — provisions all AWS resources |
 | **EC2** | Virtual servers that run WordPress |
-| **Docker** | Runs WordPress and MySQL as containers on EC2 |
 | **S3** | Stores the CloudFormation template |
 | **Lambda** | Python functions to start/stop the Dev instance |
 | **EventBridge** | Schedules Lambda to trigger at 9 AM and 6 PM |
@@ -64,12 +59,9 @@ This project deploys and monitors two WordPress environments on AWS using CloudF
 wordpress-aws-project/
 ├── cloudformation/
 │   └── wordpress-stack.yaml   # Main CloudFormation template
-├── docker/
-│   └── docker-compose.yml     # WordPress + MySQL Docker setup
 ├── scripts/
 │   ├── start-instance.py      # Lambda function to start Dev instance
 │   └── stop-instance.py       # Lambda function to stop Dev instance
-├── Jenkinsfile                 # CI/CD pipeline (optional)
 └── README.md                  # Project documentation
 ```
 
@@ -175,4 +167,5 @@ This project simulates a real company setup where:
 
 ## Author
 
+Alex Moise 
 Course-end project — AWS CloudFormation & WordPress Deployment
