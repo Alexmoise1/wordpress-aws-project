@@ -1,1 +1,256 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  WordPress Instance Setup - Deploys a live and dev WordPress environment
+  on EC2 using Docker. Dev environment is scheduled to run 9AM-6PM only.
+
+Parameters:
+  EnvironmentType:
+    Type: String
+    Description: The type of environment to deploy
+    AllowedValues:
+      - live
+      - dev
+    Default: live
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+    Description: EC2 instance type
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the WordPress MySQL database
+    Default: WordPressPass123
+
+Conditions:
+  IsLive: !Equals [!Ref EnvironmentType, live]
+  IsDev: !Equals [!Ref EnvironmentType, dev]
+
+Resources:
+
+  # -------------------------------------------------------
+  # Security Group - Controls inbound/outbound traffic
+  # -------------------------------------------------------
+  WordPressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and SSH access to WordPress instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP traffic from anywhere
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: Allow SSH access
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS traffic
+      Tags:
+        - Key: Name
+          Value: !Sub wordpress-sg-${EnvironmentType}
+        - Key: Environment
+          Value: !Ref EnvironmentType
+
+  # -------------------------------------------------------
+  # EC2 Instance - Runs WordPress via Docker
+  # -------------------------------------------------------
+  WordPressInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      ImageId: ami-0dfcb1ef8550277af  # Amazon Linux 2 (us-east-1)
+      SecurityGroups:
+        - !Ref WordPressSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub wordpress-${EnvironmentType}
+        - Key: Environment
+          Value: !Ref EnvironmentType
+        - Key: AutoSchedule
+          Value: !If [IsDev, "true", "false"]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Update system packages
+          yum update -y
+
+          # Install Docker
+          yum install -y docker
+          service docker start
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+
+          # Install Docker Compose
+          curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+
+          # Create WordPress directory
+          mkdir -p /home/ec2-user/wordpress
+          cd /home/ec2-user/wordpress
+
+          # Create docker-compose.yml
+          cat > docker-compose.yml << 'EOF'
+          version: '3.8'
+          services:
+            db:
+              image: mysql:5.7
+              restart: always
+              environment:
+                MYSQL_ROOT_PASSWORD: rootpass123
+                MYSQL_DATABASE: wordpress
+                MYSQL_USER: wpuser
+                MYSQL_PASSWORD: ${DBPassword}
+              volumes:
+                - db_data:/var/lib/mysql
+
+            wordpress:
+              image: wordpress:latest
+              restart: always
+              ports:
+                - "80:80"
+              environment:
+                WORDPRESS_DB_HOST: db:3306
+                WORDPRESS_DB_USER: wpuser
+                WORDPRESS_DB_PASSWORD: ${DBPassword}
+                WORDPRESS_DB_NAME: wordpress
+              volumes:
+                - wordpress_data:/var/www/html
+              depends_on:
+                - db
+
+          volumes:
+            db_data:
+            wordpress_data:
+          EOF
+
+          # Start WordPress
+          docker-compose up -d
+
+  # -------------------------------------------------------
+  # Elastic IP - Gives the instance a fixed public IP
+  # -------------------------------------------------------
+  WordPressEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref WordPressInstance
+      Tags:
+        - Key: Name
+          Value: !Sub wordpress-eip-${EnvironmentType}
+
+  # -------------------------------------------------------
+  # CloudWatch Alarms - Monitors the instance health
+  # -------------------------------------------------------
+  CPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub wordpress-high-cpu-${EnvironmentType}
+      AlarmDescription: Triggers when CPU usage exceeds 80%
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref WordPressInstance
+      AlarmActions:
+        - !Ref AlertSNSTopic
+      OKActions:
+        - !Ref AlertSNSTopic
+
+  StatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub wordpress-status-check-${EnvironmentType}
+      AlarmDescription: Triggers when instance status check fails
+      MetricName: StatusCheckFailed
+      Namespace: AWS/EC2
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref WordPressInstance
+      AlarmActions:
+        - !Ref AlertSNSTopic
+
+  # -------------------------------------------------------
+  # SNS Topic - Sends email alerts for alarms
+  # -------------------------------------------------------
+  AlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub wordpress-alerts-${EnvironmentType}
+      Subscription:
+        - Protocol: email
+          Endpoint: your-email@example.com  # <-- Replace with your email
+
+  # -------------------------------------------------------
+  # IAM Role - Allows EC2 to interact with AWS services
+  # -------------------------------------------------------
+  WordPressInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub wordpress-ec2-role-${EnvironmentType}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentType
+
+  WordPressInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WordPressInstanceRole
+
+# -------------------------------------------------------
+# Outputs - Useful info after stack is deployed
+# -------------------------------------------------------
+Outputs:
+  WordPressURL:
+    Description: Public URL of the WordPress instance
+    Value: !Sub http://${WordPressEIP}
+
+  InstanceId:
+    Description: EC2 Instance ID (needed for scheduling scripts)
+    Value: !Ref WordPressInstance
+    Export:
+      Name: !Sub wordpress-instance-id-${EnvironmentType}
+
+  PublicIP:
+    Description: Public IP address of the instance
+    Value: !Ref WordPressEIP
+
+  Environment:
+    Description: Environment type
+    Value: !Ref EnvironmentType
 
