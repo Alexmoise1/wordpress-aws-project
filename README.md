@@ -164,6 +164,13 @@ This project simulates a real company setup where:
 - CloudWatch monitoring ensures the team is alerted immediately if anything goes wrong
 
 ---
+## Project Links
+
+| Resource | URL |
+|---|---|
+| Live WordPress Site | http://34.193.91.87 |
+| Dev WordPress Site | http://3.231.133.74 |
+| GitHub Repository | https://github.com/Alexmoise1/wordpress-aws-project 
 
 ## Author
 
